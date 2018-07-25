@@ -1,0 +1,169 @@
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRTC demo</title>
+    <style>
+    button {
+        padding: 8px 16px;
+    }
+
+    pre {
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    video {
+        width: 100%;
+    }
+
+    .option {
+        margin-bottom: 8px;
+    }
+
+    #media {
+        max-width: 1280px;
+    }
+    </style>
+
+
+</head>
+<body>
+
+
+
+<button id="start" onclick="start()">Start</button>
+<button id="stop" style="display: none" onclick="stop()">Stop</button>
+
+<h2>State</h2>
+<p>
+    ICE gathering state: <span id="ice-gathering-state"></span>
+</p>
+<p>
+    ICE connection state: <span id="ice-connection-state"></span>
+</p>
+<p>
+    Signaling state: <span id="signaling-state"></span>
+</p>
+
+<div id="media" style="">
+    <h2>Media</h2>
+
+    <audio id="audio" autoplay="true"></audio>
+    <video id="video" autoplay="true"></video>
+</div>
+
+</body>
+
+<script>
+
+        var pc = new RTCPeerConnection();
+
+        var iceConnectionLog = document.getElementById('ice-connection-state'),
+            iceGatheringLog = document.getElementById('ice-gathering-state'),
+            signalingLog = document.getElementById('signaling-state');
+
+        // register some listeners to help debugging
+        pc.addEventListener('icegatheringstatechange', function() {
+            iceGatheringLog.textContent += ' -> ' + pc.iceGatheringState;
+        }, false);
+        iceGatheringLog.textContent = pc.iceGatheringState;
+
+        pc.addEventListener('iceconnectionstatechange', function() {
+            iceConnectionLog.textContent += ' -> ' + pc.iceConnectionState;
+        }, false);
+        iceConnectionLog.textContent = pc.iceConnectionState;
+
+        pc.addEventListener('signalingstatechange', function() {
+            signalingLog.textContent += ' -> ' + pc.signalingState;
+        }, false);
+        signalingLog.textContent = pc.signalingState;
+
+
+        function playStream( stream) {
+            document.getElementById('video').srcObject = stream;
+        }
+
+        function negotiate() {
+            return pc.createOffer().then(function(offer) {
+                return pc.setLocalDescription(offer);
+            }).
+            then(function() {
+                return new Promise(function(resolve) {
+                    if (pc.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        function checkState() {
+                            if (pc.iceGatheringState === 'complete') {
+                                pc.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        }
+                        pc.addEventListener('icegatheringstatechange', checkState);
+                    }
+                });
+            })
+            .then(function() {
+
+                var offer = pc.localDescription;
+                return fetch('/offer', {
+                    body: JSON.stringify({
+                        sdp: offer.sdp,
+                        type: offer.type,
+                    }),
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    },
+                    method: 'POST'
+                });
+            }).then(function(response) {
+                return response.json();
+            }).then(function(answer) {
+
+                const answersdp = new RTCSessionDescription({
+                    type : 'answer',
+                    sdp	: answer.sdp
+                });
+                return pc.setRemoteDescription(answersdp);
+            });
+        }
+
+        function start() {
+            document.getElementById('start').style.display = 'none';
+
+            var constraints = {
+                audio: true,
+                video: true
+            };
+
+            navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
+                stream.getTracks().forEach(function(track) {
+                    pc.addTrack(track, stream);
+                });
+
+                playStream(stream);
+                return negotiate();
+            }, function(err) {
+                alert('Could not acquire media: ' + err);
+            });
+
+            document.getElementById('stop').style.display = 'inline-block';
+        }
+
+        function stop() {
+            document.getElementById('stop').style.display = 'none';
+
+            // close audio / video
+            pc.getSenders().forEach(function(sender) {
+                sender.track.stop();
+            });
+
+            // close peer connection
+            setTimeout(function() {
+                pc.close();
+            }, 500);
+        }
+
+    </script>
+</html>
